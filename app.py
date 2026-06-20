@@ -5,19 +5,35 @@ import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# --- Page Config ---
-st.set_page_config(
-    page_title="PAS Dashboard", 
-    layout="wide", 
-    page_icon="📈",
-    initial_sidebar_state="collapsed" # <-- Add this parameter
-)
+st.set_page_config(page_title="PAS Dashboard", layout="wide", page_icon="📈")
 
-# --- MongoDB Connection ---
+# --- Custom CSS for UI Tweaks ---
+st.markdown("""
+    <style>
+        /* 1. Force tabs to expand and distribute evenly across the screen */
+        button[data-baseweb="tab"] {
+            flex: 1 !important;
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+        }
+        
+        /* 2. Target the specific text inside the tabs to make it massive and bold */
+        button[data-baseweb="tab"] p {
+            font-size: 22px !important;
+            font-weight: 600 !important;
+        }
+        
+        /* 3. Slightly reduce the invisible gap above the tabs */
+        div[data-testid="stTabs"] {
+            margin-top: -10px !important;
+        }
+    </style>
+""", unsafe_allow_html=True)
 MONGO_URI = os.getenv("MONGO_URL")
+TAGS_URL=os.getenv("HABITICA_TAGS_URL")
+API_URL=os.getenv("HABITICA_API_URL")
 
 @st.cache_resource
 def init_connection():
@@ -28,7 +44,6 @@ db = client.pas_database
 history_col = db.history
 weights_col = db.weights
 
-# --- Load Data ---
 data = list(history_col.find({}, {"_id": 0}))
 if not data:
     st.warning("No data found in MongoDB. Please run fetch_habitica.py first.")
@@ -42,100 +57,175 @@ df['cumulative_score'] = df['net_score'].cumsum()
 latest_day = df.iloc[-1]
 latest_tasks = latest_day['tasks']
 
-# --- SIDEBAR: Weight Manager ---
-with st.sidebar:
-    st.header("⚙️ Task Weights")
-    st.markdown("Adjust Fibonacci weights. Saves directly to Cloud.")
-    
-    weights_doc = weights_col.find_one({"_id": "current_weights"})
-    current_weights = weights_doc.get("weights", {}) if weights_doc else {}
-            
-    new_weights = {}
-    fibonacci_sequence = [1, 2, 3, 5, 8, 13, 21]
-    
-    with st.form("weights_form"):
-        for task in latest_tasks:
-            task_id = task['id']
-            title = task['title']
-            current_w = current_weights.get(task_id, 1)
-            
-            if current_w not in fibonacci_sequence:
-                fibonacci_sequence.append(current_w)
-                fibonacci_sequence.sort()
+# --- Group Tasks by Primary Tag for UI ---
+tasks_by_tag = {}
+for task in latest_tasks:
+    tags = task.get('tags', [])
+    if not tags:
+        primary_tag = "📁 Uncategorized"
+    else:
+        # Place the task only in its FIRST tag folder to prevent UI duplicates
+        primary_tag = f"📁 {tags[0]}" 
+        
+    tasks_by_tag.setdefault(primary_tag, []).append(task)
+
+# --- TOP CONTROL BAR ---
+# Creates 3 columns: Left (popover), Middle (empty space), Right (sync button)
+col_left, col_spacer, col_right = st.columns([2, 6, 2], vertical_alignment="bottom")
+
+with col_left:
+    with st.popover(" Edit Task Weights", use_container_width=True):
+        st.markdown("Adjust weights by Subcategory. Saves to Cloud.")
+        
+        weights_doc = weights_col.find_one({"_id": "current_weights"})
+        current_weights = weights_doc.get("weights", {}) if weights_doc else {}
                 
-            new_w = st.selectbox(
-                f"{title[:30]}..." if len(title) > 30 else title, 
-                options=fibonacci_sequence, 
-                index=fibonacci_sequence.index(current_w),
-                key=task_id
-            )
-            new_weights[task_id] = new_w
+        new_weights = {}
+        fibonacci_sequence = [1, 2, 3, 5, 8, 13, 21]
+        
+        with st.form("weights_form"):
+            for tag_name, tasks_in_tag in tasks_by_tag.items():
+                with st.expander(tag_name):
+                    for task in tasks_in_tag:
+                        task_id = task['id']
+                        title = task['title']
+                        current_w = current_weights.get(task_id, 1)
+                        
+                        if current_w not in fibonacci_sequence:
+                            fibonacci_sequence.append(current_w)
+                            fibonacci_sequence.sort()
+                            
+                        new_w = st.selectbox(
+                            f"{title[:40]}..." if len(title) > 40 else title, 
+                            options=fibonacci_sequence, 
+                            index=fibonacci_sequence.index(current_w),
+                            key=task_id
+                        )
+                        new_weights[task_id] = new_w
+                        
+            if st.form_submit_button("Save Weights to Cloud"):
+                weights_col.update_one({"_id": "current_weights"}, {"$set": {"weights": new_weights}}, upsert=True)
+                st.rerun()
+
+with col_right:
+    # (The <br> tag that was here has been removed!)
+    if st.button(" Sync Live Data", use_container_width=True):
+        with st.spinner("Fetching latest tasks..."):
+            import requests
+            USER_ID = os.getenv("USER_ID")
+            API_TOKEN = os.getenv("API_TOKEN")
+            HEADERS = {"x-api-user": USER_ID, "x-api-key": API_TOKEN, "x-client": f"{USER_ID}-PAS"}
             
-        submitted = st.form_submit_button("Save Weights to Cloud")
-        if submitted:
-            weights_col.update_one({"_id": "current_weights"}, {"$set": {"weights": new_weights}}, upsert=True)
-            st.success("Weights saved successfully!")
+            tags_response = requests.get(TAGS_URL, headers=HEADERS)
+            tag_map = {t["id"]: t["name"] for t in tags_response.json().get("data", [])} if tags_response.status_code == 200 else {}
 
-# --- MAIN DASHBOARD ---
-st.title("Personal Analytics System 📈")
+            response = requests.get(API_URL, headers=HEADERS)
+            
+            if response.status_code == 200:
+                dailies = response.json().get("data", [])
+                weights_doc = weights_col.find_one({"_id": "current_weights"})
+                task_weights = weights_doc.get("weights", {}) if weights_doc else {}
+                
+                daily_score = 0
+                tasks_log = []
+                
+                for task in dailies:
+                    task_id = task.get("id")
+                    completed = task.get("completed", False)
+                    is_due = task.get("isDue", False)
+                    real_tag_names = [tag_map.get(tid, tid) for tid in task.get("tags", [])]
+                    weight = task_weights.get(task_id, 1) 
+                    
+                    if is_due:
+                        if completed: daily_score += weight
+                        else: daily_score -= weight
+                        
+                    tasks_log.append({
+                        "id": task_id, "title": task.get("text"), "completed": completed,
+                        "tags": real_tag_names, "weight": weight, "is_due": is_due
+                    })
 
-# --- KPIs ---
+                from datetime import datetime
+                today_str = datetime.now().strftime('%Y-%m-%d')
+                history_col.update_one(
+                    {"date": today_str}, 
+                    {"$set": {"date": today_str, "net_score": daily_score, "tasks": tasks_log}}, 
+                    upsert=True
+                )
+                st.success("Synced successfully!")
+                st.rerun()
+            else:
+                st.error("Failed to connect to Habitica.")
+
+st.title("Personal Analytics System ")
+
+
 st.markdown("### Today's Overview")
 col1, col2, col3 = st.columns(3)
 
-# Calculate metrics for the cards
 current_total = latest_day['cumulative_score']
 today_net = latest_day['net_score']
 due_tasks = [t for t in latest_tasks if t.get('is_due', True)]
 completed_due = [t for t in due_tasks if t['completed']]
 completion_rate = int((len(completed_due) / len(due_tasks) * 100)) if due_tasks else 0
-
-# Calculate day-over-day changes if we have more than 1 day of data
 delta_net = today_net - df.iloc[-2]['net_score'] if len(df) > 1 else None
 
-col1.metric("Cumulative Score", f"{current_total}", help="Total accumulated score over time")
+col1.metric("Cumulative Score", f"{current_total}")
 col2.metric("Today's Net Impact", f"{today_net > 0 and '+' or ''}{today_net}", delta=delta_net, delta_color="normal")
 col3.metric("Daily Task Completion", f"{completion_rate}%", f"{len(completed_due)}/{len(due_tasks)} Tasks", delta_color="off")
 
 st.markdown("---")
+tab1, tab2, tab3 = st.tabs([" Primary Trajectory", " Subcategories", " Today's Breakdown"])
 
-# --- TABS ---
-tab1, tab2, tab3 = st.tabs(["📊 Primary Trajectory", "🏷️ Subcategories", "📋 Today's Breakdown"])
-
-# --- TAB 1: Primary Chart ---
+# --- TAB 1: Primary Chart (With Historical Red Baseline) ---
 with tab1:
     fig = go.Figure()
 
-    if len(df) == 1:
-        curr_row = df.iloc[0]
-        curr_score = curr_row['cumulative_score']
-        color = "#ff4b4b" if curr_score < 0 else "#00cc96"
+    # Create the Historical Baseline
+    first_date = df.iloc[0]['date']
+    origin_date = first_date - pd.Timedelta(days=7)
+    yesterday_anchor = first_date - pd.Timedelta(days=1)
+    
+    # Draw a flat line at zero from 7 days ago to yesterday
+    fig.add_trace(go.Scatter(
+        x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
+        line=dict(color="#ff4b4b", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
+    ))
+    
+    # Connect yesterday's zero to today's actual score to create the initial trajectory slope
+    first_score = df.iloc[0]['cumulative_score']
+    first_color = "#ff4b4b" if first_score < 0 else "#00cc96"
+    fig.add_trace(go.Scatter(
+        x=[yesterday_anchor, first_date], y=[0, first_score], mode='lines',
+        line=dict(color=first_color, width=4), showlegend=False, hoverinfo="skip"
+    ))
+
+    # Plot actual data points
+    fig.add_trace(go.Scatter(
+        x=[first_date], y=[first_score], mode='markers',
+        marker=dict(color=first_color, size=8), showlegend=False, hoverinfo="text",
+        text=f"Date: {first_date.strftime('%Y-%m-%d')}<br>Net: {df.iloc[0]['net_score']}<br>Total: {first_score}"
+    ))
+
+    for i in range(1, len(df)):
+        prev_row = df.iloc[i-1]
+        curr_row = df.iloc[i]
         
+        prev_score = prev_row['cumulative_score']
+        curr_score = curr_row['cumulative_score']
+        
+        if curr_score < 0: color = "#ff4b4b" 
+        elif curr_score >= 0 and curr_score < prev_score: color = "#ff4b4b" 
+        else: color = "#00cc96" 
+            
         fig.add_trace(go.Scatter(
-            x=[curr_row['date']], y=[curr_score], mode='markers',
-            marker=dict(color=color, size=12), showlegend=False, hoverinfo="text",
+            x=[prev_row['date'], curr_row['date']], y=[prev_score, curr_score],
+            mode='lines+markers', line=dict(color=color, width=4), marker=dict(color=color, size=8),
+            showlegend=False, hoverinfo="text",
             text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Net: {curr_row['net_score']}<br>Total: {curr_score}"
         ))
-    else:
-        for i in range(1, len(df)):
-            prev_row = df.iloc[i-1]
-            curr_row = df.iloc[i]
-            
-            prev_score = prev_row['cumulative_score']
-            curr_score = curr_row['cumulative_score']
-            
-            if curr_score < 0: color = "#ff4b4b" 
-            elif curr_score >= 0 and curr_score < prev_score: color = "#ff4b4b" 
-            else: color = "#00cc96" 
-                
-            fig.add_trace(go.Scatter(
-                x=[prev_row['date'], curr_row['date']], y=[prev_score, curr_score],
-                mode='lines+markers', line=dict(color=color, width=4), marker=dict(color=color, size=8),
-                showlegend=False, hoverinfo="text",
-                text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Net: {curr_row['net_score']}<br>Total: {curr_score}"
-            ))
 
-    fig.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
+    fig.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
     fig.update_layout(xaxis_title="Date", yaxis_title="Cumulative Score", template="plotly_dark", hovermode="x unified", xaxis=dict(type='date', tickformat='%Y-%m-%d'), height=500)
     st.plotly_chart(fig, use_container_width=True)
 
@@ -150,7 +240,8 @@ with tab2:
     if not all_tags:
         st.info("No tags found in your fetched Habitica tasks.")
     else:
-        selected_tag = st.selectbox("Select a Tag UUID to isolate:", list(all_tags))
+        # The dropdown now cleanly shows "Health", "Career", etc.
+        selected_tag = st.selectbox("Select a Subcategory to isolate:", list(all_tags))
         
         isolated_scores = []
         for index, row in df.iterrows():
@@ -165,13 +256,25 @@ with tab2:
         iso_df['iso_cumulative'] = iso_df['iso_net'].cumsum()
         
         fig_iso = go.Figure()
+        
+        # Add the same baseline logic to the subcategories
+        iso_first_score = iso_df.iloc[0]['iso_cumulative']
+        fig_iso.add_trace(go.Scatter(
+            x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
+            line=dict(color="#ab63fa", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
+        ))
+        fig_iso.add_trace(go.Scatter(
+            x=[yesterday_anchor, first_date], y=[0, iso_first_score], mode='lines',
+            line=dict(color="#ab63fa", width=3), showlegend=False, hoverinfo="skip"
+        ))
+        
         fig_iso.add_trace(go.Scatter(
             x=iso_df['date'], y=iso_df['iso_cumulative'], mode='lines+markers',
             line=dict(color="#ab63fa", width=3), name="Isolated Tag", hoverinfo="text",
             text=[f"Net Daily: {net}<br>Total: {cum}" for net, cum in zip(iso_df['iso_net'], iso_df['iso_cumulative'])]
         ))
         
-        fig_iso.add_hline(y=0, line_dash="dash", line_color="white", opacity=0.3)
+        fig_iso.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
         fig_iso.update_layout(template="plotly_dark", xaxis=dict(type='date', tickformat='%Y-%m-%d'), height=500)
         st.plotly_chart(fig_iso, use_container_width=True)
 
@@ -179,14 +282,14 @@ with tab2:
 with tab3:
     st.markdown(f"**Date:** {latest_day['date'].strftime('%A, %B %d, %Y')}")
     
-    # Create a cleaner list for the dataframe
     display_tasks = []
     for t in latest_tasks:
         if t.get('is_due', True):
             display_tasks.append({
                 "Status": "✅" if t['completed'] else "❌",
                 "Task": t['title'],
-                "Impact": f"+{t['weight']}" if t['completed'] else f"-{t['weight']}"
+                "Impact": f"+{t['weight']}" if t['completed'] else f"-{t['weight']}",
+                "Tags": ", ".join(t.get('tags', [])) # Show real tags in the table too!
             })
             
     if display_tasks:

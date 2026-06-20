@@ -1,8 +1,9 @@
 import requests
+import os
 from datetime import datetime
 from pymongo import MongoClient
-import os
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # --- Configuration ---
@@ -15,11 +16,10 @@ HEADERS = {
     "x-api-key": API_TOKEN,
     "x-client": CLIENT_ID
 }
-HABITICA_API_URL = os.getenv("HABITICA_API_URL")
+HABITICA_TASKS_URL = os.getenv("HABITICA_API_URL")
+HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL")
 
-# --- MongoDB Configuration ---
-# Replace with your actual MongoDB Atlas connection string
-MONGO_URI = os.getenv("MONGO_URL") 
+MONGO_URI = os.getenv("MONGO_URL")
 
 def fetch_and_update_history():
     print("Connecting to MongoDB Atlas...")
@@ -28,16 +28,23 @@ def fetch_and_update_history():
     history_col = db.history
     weights_col = db.weights
 
+    # 1. Fetch Real Tag Names
+    print("Fetching tags from Habitica...")
+    tags_response = requests.get(HABITICA_TAGS_URL, headers=HEADERS)
+    tag_map = {}
+    if tags_response.status_code == 200:
+        for t in tags_response.json().get("data", []):
+            tag_map[t["id"]] = t["name"]
+
+    # 2. Fetch Tasks
     print("Fetching tasks from Habitica...")
-    response = requests.get(HABITICA_API_URL, headers=HEADERS)
+    response = requests.get(HABITICA_TASKS_URL, headers=HEADERS)
     if response.status_code != 200:
         print(f"Failed to fetch API. Status: {response.status_code}")
-        print(f"Error Details: {response.text}")
         return
 
     dailies = response.json().get("data", [])
     
-    # Load dynamically assigned weights from MongoDB
     weights_doc = weights_col.find_one({"_id": "current_weights"})
     task_weights = weights_doc.get("weights", {}) if weights_doc else {}
 
@@ -47,8 +54,11 @@ def fetch_and_update_history():
     for task in dailies:
         task_id = task.get("id")
         completed = task.get("completed", False)
-        tags = task.get("tags", [])
         is_due = task.get("isDue", False)
+        
+        # Translate UUIDs to Real Names using our tag_map
+        raw_tags = task.get("tags", [])
+        real_tag_names = [tag_map.get(tid, tid) for tid in raw_tags]
         
         weight = task_weights.get(task_id, 1) 
         
@@ -62,20 +72,18 @@ def fetch_and_update_history():
             "id": task_id,
             "title": task.get("text"),
             "completed": completed,
-            "tags": tags,
+            "tags": real_tag_names, # Save the real names!
             "weight": weight,
             "is_due": is_due
         })
 
     today_str = datetime.now().strftime('%Y-%m-%d')
-    
     record = {
         "date": today_str,
         "net_score": daily_score,
         "tasks": tasks_log
     }
     
-    # Upsert ensures that if you run the script twice today, it updates today's entry instead of duplicating it
     history_col.update_one({"date": today_str}, {"$set": record}, upsert=True)
     
     total_days = history_col.count_documents({})
