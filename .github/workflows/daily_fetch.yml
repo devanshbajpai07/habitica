@@ -1,0 +1,33 @@
+name: Daily Habitica Fetch
+
+on:
+  schedule:
+    # Runs at 18:20 UTC every day (11:50 PM IST)
+    - cron: '20 18 * * *'
+  workflow_dispatch: # This allows you to click a button to run it manually on GitHub
+
+jobs:
+  run-fetch-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11.9' # or whatever version you are using locally
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Execute Fetch Script
+        env:
+          USER_ID: ${{ secrets.USER_ID }}
+          API_TOKEN: ${{ secrets.API_TOKEN }}
+          MONGO_URL: ${{ secrets.MONGO_URL }}
+          HABITICA_API_URL: ${{ secrets.HABITICA_API_URL }}
+        run: python fetch_habitica.py
