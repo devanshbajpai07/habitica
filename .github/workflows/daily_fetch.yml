@@ -30,4 +30,5 @@ jobs:
           API_TOKEN: ${{ secrets.API_TOKEN }}
           MONGO_URL: ${{ secrets.MONGO_URL }}
           HABITICA_API_URL: ${{ secrets.HABITICA_API_URL }}
+          HABITICA_TAGS_URL: ${{ secrets.HABITICA_TAGS_URL}}
         run: python fetch_habitica.py
