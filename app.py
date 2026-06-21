@@ -177,59 +177,68 @@ col3.metric("Daily Task Completion", f"{completion_rate}%", f"{len(completed_due
 st.markdown("---")
 tab1, tab2, tab3 = st.tabs([" Primary Trajectory", " Subcategories", " Today's Breakdown"])
 
-# --- TAB 1: Primary Chart (With Historical Red Baseline) ---
+# --- TAB 1: Primary Chart (Daily Net Score) ---
 with tab1:
     fig = go.Figure()
 
-    # Create the Historical Baseline
     first_date = df.iloc[0]['date']
-    origin_date = first_date - pd.Timedelta(days=7)
+    # Create a dynamic, short baseline just 2 days in the past so it draws beautifully from off-screen
+    origin_date = first_date - pd.Timedelta(days=2) 
     yesterday_anchor = first_date - pd.Timedelta(days=1)
     
-    # Draw a flat line at zero from 7 days ago to yesterday
+    # Draw the dashed baseline
     fig.add_trace(go.Scatter(
         x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
         line=dict(color="#ff4b4b", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
     ))
     
-    # Connect yesterday's zero to today's actual score to create the initial trajectory slope
-    first_score = df.iloc[0]['cumulative_score']
+    first_score = df.iloc[0]['net_score'] 
     first_color = "#ff4b4b" if first_score < 0 else "#00cc96"
     fig.add_trace(go.Scatter(
         x=[yesterday_anchor, first_date], y=[0, first_score], mode='lines',
         line=dict(color=first_color, width=4), showlegend=False, hoverinfo="skip"
     ))
 
-    # Plot actual data points
     fig.add_trace(go.Scatter(
         x=[first_date], y=[first_score], mode='markers',
         marker=dict(color=first_color, size=8), showlegend=False, hoverinfo="text",
-        text=f"Date: {first_date.strftime('%Y-%m-%d')}<br>Net: {df.iloc[0]['net_score']}<br>Total: {first_score}"
+        text=f"Date: {first_date.strftime('%Y-%m-%d')}<br>Daily Score: {first_score}"
     ))
 
     for i in range(1, len(df)):
         prev_row = df.iloc[i-1]
         curr_row = df.iloc[i]
         
-        prev_score = prev_row['cumulative_score']
-        curr_score = curr_row['cumulative_score']
+        prev_score = prev_row['net_score'] 
+        curr_score = curr_row['net_score'] 
         
-        if curr_score < 0: color = "#ff4b4b" 
-        elif curr_score >= 0 and curr_score < prev_score: color = "#ff4b4b" 
-        else: color = "#00cc96" 
+        color = "#ff4b4b" if curr_score < 0 else "#00cc96"
             
         fig.add_trace(go.Scatter(
             x=[prev_row['date'], curr_row['date']], y=[prev_score, curr_score],
             mode='lines+markers', line=dict(color=color, width=4), marker=dict(color=color, size=8),
             showlegend=False, hoverinfo="text",
-            text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Net: {curr_row['net_score']}<br>Total: {curr_score}"
+            text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Daily Score: {curr_score}"
         ))
 
     fig.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
-    fig.update_layout(xaxis_title="Date", yaxis_title="Cumulative Score", template="plotly_dark", hovermode="x unified", xaxis=dict(type='date', tickformat='%Y-%m-%d'), height=500)
+    
+    fig.update_layout(
+        xaxis_title="Trajectory Trend", 
+        yaxis_title="Daily Net Score", 
+        template="plotly_dark", 
+        hovermode="x unified", 
+        height=500,
+        xaxis=dict(
+            type='date', 
+            # REMOVED the hardcoded range so it auto-scales naturally!
+            showticklabels=False, 
+            showgrid=False 
+        )
+    )
     st.plotly_chart(fig, use_container_width=True)
 
-# --- TAB 2: Subcategories ---
+# --- TAB 2: Subcategories (Daily Net Score) ---
 with tab2:
     all_tags = set()
     for tasks in df['tasks']:
@@ -240,7 +249,6 @@ with tab2:
     if not all_tags:
         st.info("No tags found in your fetched Habitica tasks.")
     else:
-        # The dropdown now cleanly shows "Health", "Career", etc.
         selected_tag = st.selectbox("Select a Subcategory to isolate:", list(all_tags))
         
         isolated_scores = []
@@ -253,29 +261,45 @@ with tab2:
             
         iso_df = df[['date']].copy()
         iso_df['iso_net'] = isolated_scores
-        iso_df['iso_cumulative'] = iso_df['iso_net'].cumsum()
         
         fig_iso = go.Figure()
         
-        # Add the same baseline logic to the subcategories
-        iso_first_score = iso_df.iloc[0]['iso_cumulative']
+        iso_first_score = iso_df.iloc[0]['iso_net']
+        
+        # Dynamic baseline for subcategories too
+        first_date = iso_df.iloc[0]['date']
+        origin_date = first_date - pd.Timedelta(days=2)
+        yesterday_anchor = first_date - pd.Timedelta(days=1)
+        
         fig_iso.add_trace(go.Scatter(
             x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
             line=dict(color="#ab63fa", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
         ))
+        
         fig_iso.add_trace(go.Scatter(
             x=[yesterday_anchor, first_date], y=[0, iso_first_score], mode='lines',
             line=dict(color="#ab63fa", width=3), showlegend=False, hoverinfo="skip"
         ))
         
         fig_iso.add_trace(go.Scatter(
-            x=iso_df['date'], y=iso_df['iso_cumulative'], mode='lines+markers',
+            x=iso_df['date'], y=iso_df['iso_net'], mode='lines+markers',
             line=dict(color="#ab63fa", width=3), name="Isolated Tag", hoverinfo="text",
-            text=[f"Net Daily: {net}<br>Total: {cum}" for net, cum in zip(iso_df['iso_net'], iso_df['iso_cumulative'])]
+            text=[f"Date: {date.strftime('%Y-%m-%d')}<br>Daily Score: {net}" for date, net in zip(iso_df['date'], iso_df['iso_net'])]
         ))
         
         fig_iso.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
-        fig_iso.update_layout(template="plotly_dark", xaxis=dict(type='date', tickformat='%Y-%m-%d'), height=500)
+        
+        fig_iso.update_layout(
+            xaxis_title="Subcategory Trend", 
+            yaxis_title="Daily Isolated Score", 
+            template="plotly_dark", 
+            height=500,
+            xaxis=dict(
+                type='date', 
+                showticklabels=False, 
+                showgrid=False
+            )
+        )
         st.plotly_chart(fig_iso, use_container_width=True)
 
 # --- TAB 3: Today's Tasks Breakdown ---
