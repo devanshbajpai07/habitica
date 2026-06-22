@@ -93,17 +93,28 @@ def fetch_and_update_history():
         )
         print(f"Successfully logged data for {today_str}. Net Score: {daily_score}")
         # --- WIDGET IMAGE GENERATOR ---
+        # --- WIDGET IMAGE GENERATOR ---
         print("Generating widget graph...")
-        all_data = list(history_col.find().sort("date", 1))
+        misc_col = db.misc # We need to pull your miscellaneous points too!
         
-        if all_data:
-            dates = [d['date'] for d in all_data]
-            scores = [d['net_score'] for d in all_data]
+        all_history = list(history_col.find().sort("date", 1))
+        all_misc = list(misc_col.find().sort("date", 1))
+        
+        # Combine Habitica Scores and Misc Scores by date so it perfectly matches Streamlit
+        combined_data = {}
+        for h in all_history:
+            combined_data[h['date']] = h.get('net_score', 0)
+        for m in all_misc:
+            d = m['date']
+            combined_data[d] = combined_data.get(d, 0) + m.get('score', 0)
+            
+        if combined_data:
+            dates = sorted(list(combined_data.keys()))
             
             cumul = []
             current = 0
-            for s in scores:
-                current += s
+            for d in dates:
+                current += combined_data[d]
                 cumul.append(current)
                 
             fig, ax = plt.subplots(figsize=(6, 3), facecolor='#0E1117')
@@ -115,17 +126,16 @@ def fetch_and_update_history():
             # 1. Draw the thick main line
             ax.plot(dates, cumul, color=color, linewidth=4)
             
-            # 2. Add the subtle fill/gradient under the line
-            y_min, y_max = min(cumul), max(cumul)
-            y_range = y_max - y_min if y_max != y_min else 10
-            y_bottom = y_min - y_range * 0.1
-            ax.fill_between(dates, cumul, y_bottom, color=color, alpha=0.15)
+            # 2. Add the fill anchored perfectly to the ZERO line (0-axis)
+            ax.fill_between(dates, cumul, 0, color=color, alpha=0.15)
             
             # 3. Draw the zero-baseline
             ax.axhline(y=0, color='white', alpha=0.15, linestyle='--')
             
-            # 4. Expand the top of the graph so the line doesn't crash into our text
-            ax.set_ylim(y_bottom, y_max + y_range * 0.6)
+            # 4. Expand limits so text doesn't overlap and fill looks good
+            y_min, y_max = min(cumul + [0]), max(cumul + [0])
+            y_range = y_max - y_min if y_max != y_min else 10
+            ax.set_ylim(y_min - y_range * 0.15, y_max + y_range * 0.6)
             
             # 5. Large Top-Left Score Text
             ax.text(0.04, 0.90, score_str, transform=ax.transAxes, color='white', 
@@ -140,8 +150,8 @@ def fetch_and_update_history():
             
             # 8. Add the rounded dark badge tooltip at the end
             ax.annotate(score_str, 
-                        xy=(len(dates)-1, cumul[-1]), 
-                        xytext=(0, 12), # Push it slightly above the dot
+                        xy=(dates[-1], cumul[-1]), 
+                        xytext=(0, 12),
                         textcoords="offset points",
                         ha='center', va='bottom',
                         color='white', fontsize=10, fontweight='bold',
