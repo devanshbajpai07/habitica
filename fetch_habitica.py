@@ -92,6 +92,7 @@ def fetch_and_update_history():
             upsert=True
         )
         print(f"Successfully logged data for {today_str}. Net Score: {daily_score}")
+        # --- WIDGET IMAGE GENERATOR ---
         print("Generating widget graph...")
         all_data = list(history_col.find().sort("date", 1))
         
@@ -109,9 +110,42 @@ def fetch_and_update_history():
             ax.set_facecolor('#0E1117')
             
             color = '#00cc96' if cumul[-1] >= 0 else '#ff4b4b'
+            score_str = f"+{cumul[-1]}" if cumul[-1] > 0 else f"{cumul[-1]}"
             
-            ax.plot(dates, cumul, color=color, linewidth=5)
+            # 1. Draw the thick main line
+            ax.plot(dates, cumul, color=color, linewidth=4)
+            
+            # 2. Add the subtle fill/gradient under the line
+            y_min, y_max = min(cumul), max(cumul)
+            y_range = y_max - y_min if y_max != y_min else 10
+            y_bottom = y_min - y_range * 0.1
+            ax.fill_between(dates, cumul, y_bottom, color=color, alpha=0.15)
+            
+            # 3. Draw the zero-baseline
             ax.axhline(y=0, color='white', alpha=0.15, linestyle='--')
+            
+            # 4. Expand the top of the graph so the line doesn't crash into our text
+            ax.set_ylim(y_bottom, y_max + y_range * 0.6)
+            
+            # 5. Large Top-Left Score Text
+            ax.text(0.04, 0.90, score_str, transform=ax.transAxes, color='white', 
+                    fontsize=34, fontweight='bold', va='top', ha='left')
+                    
+            # 6. Subtitle "CURRENT TRAJECTORY"
+            ax.text(0.04, 0.70, "CURRENT TRAJECTORY", transform=ax.transAxes, color='#A0A0A0', 
+                    fontsize=10, va='top', ha='left')
+            
+            # 7. Add the glowing dot at the very end of the line
+            ax.plot(dates[-1], cumul[-1], marker='o', color=color, markersize=6)
+            
+            # 8. Add the rounded dark badge tooltip at the end
+            ax.annotate(score_str, 
+                        xy=(len(dates)-1, cumul[-1]), 
+                        xytext=(0, 12), # Push it slightly above the dot
+                        textcoords="offset points",
+                        ha='center', va='bottom',
+                        color='white', fontsize=10, fontweight='bold',
+                        bbox=dict(boxstyle="round,pad=0.4", fc="#2A2D35", ec="none", alpha=0.9))
             
             ax.axis('off')
             plt.tight_layout(pad=0)
