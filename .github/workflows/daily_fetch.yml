@@ -2,33 +2,45 @@ name: Daily Habitica Fetch
 
 on:
   schedule:
-    # Runs at 18:20 UTC every day (11:50 PM IST)
-    - cron: '20 18 * * *'
-  workflow_dispatch: # This allows you to click a button to run it manually on GitHub
+    # Runs at 18:23 UTC (approx 11:53 PM IST to avoid the global queue)
+    - cron: '23 18 * * *'
+  workflow_dispatch: # Allows you to run it manually with a button click
 
 jobs:
-  run-fetch-script:
+  fetch-and-update:
     runs-on: ubuntu-latest
+    
+    # CRITICAL: This gives the bot permission to save the image back to your repo
+    permissions:
+      contents: write 
 
     steps:
-      - name: Checkout Repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11.9' # or whatever version you are using locally
+          python-version: '3.11.9' 
 
-      - name: Install Dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests pymongo python-dotenv
+          pip install -r requirements.txt
 
-      - name: Execute Fetch Script
+      - name: Run Habitica fetch script
         env:
           USER_ID: ${{ secrets.USER_ID }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
           MONGO_URL: ${{ secrets.MONGO_URL }}
           HABITICA_API_URL: ${{ secrets.HABITICA_API_URL }}
-          HABITICA_TAGS_URL: ${{ secrets.HABITICA_TAGS_URL}}
+          HABITICA_TAGS_URL: ${{ secrets.HABITICA_TAGS_URL }}
         run: python fetch_habitica.py
+
+      - name: Commit and Push Widget Image
+        run: |
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add widget.png
+          git commit -m "Automated update of widget.png" || echo "No changes to commit"
+          git push

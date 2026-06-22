@@ -3,6 +3,9 @@ import os
 from pymongo import MongoClient
 from datetime import datetime
 from dotenv import load_dotenv
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 # Load environment variables (for local testing)
 load_dotenv()
@@ -89,6 +92,32 @@ def fetch_and_update_history():
             upsert=True
         )
         print(f"Successfully logged data for {today_str}. Net Score: {daily_score}")
+        print("Generating widget graph...")
+        all_data = list(history_col.find().sort("date", 1))
+        
+        if all_data:
+            dates = [d['date'] for d in all_data]
+            scores = [d['net_score'] for d in all_data]
+            
+            cumul = []
+            current = 0
+            for s in scores:
+                current += s
+                cumul.append(current)
+                
+            fig, ax = plt.subplots(figsize=(6, 3), facecolor='#0E1117')
+            ax.set_facecolor('#0E1117')
+            
+            color = '#00cc96' if cumul[-1] >= 0 else '#ff4b4b'
+            
+            ax.plot(dates, cumul, color=color, linewidth=5)
+            ax.axhline(y=0, color='white', alpha=0.15, linestyle='--')
+            
+            ax.axis('off')
+            plt.tight_layout(pad=0)
+            
+            plt.savefig('widget.png', dpi=300, bbox_inches='tight', facecolor=fig.get_facecolor())
+            print("Widget image saved to repository!")
     else:
         print(f"Failed to fetch data. Status code: {response.status_code}")
         response.raise_for_status()
