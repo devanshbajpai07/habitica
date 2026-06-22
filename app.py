@@ -164,7 +164,7 @@ with col_left:
                 st.rerun()
 
 with col_right1:
-    with st.popover("📋 Today's Breakdown", use_container_width=True):
+    with st.popover("Today's Breakdown", use_container_width=True):
         st.markdown(f"**Date:** {latest_day['date'].strftime('%A, %B %d, %Y')}")
         st.markdown("---")
         
@@ -196,60 +196,62 @@ with col_right1:
             st.info("No tasks were due today!")
 
 with col_right2:
-    if st.button("Sync Live Data", use_container_width=True):
-        with st.spinner("Fetching latest tasks..."):
-            import requests
-            # --- NEW ENVIRONMENT VARIABLES IMPLEMENTATION ---
-            USER_ID = os.getenv("USER_ID")
-            API_TOKEN = os.getenv("API_TOKEN")
-            HABITICA_API_URL = os.getenv("HABITICA_API_URL", "https://habitica.com/api/v3/tasks/user?type=dailys")
-            HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL", "https://habitica.com/api/v3/tags")
-            
-            HEADERS = {"x-api-user": USER_ID, "x-api-key": API_TOKEN, "x-client": f"{USER_ID}-PAS"}
-            
-            tags_response = requests.get(HABITICA_TAGS_URL, headers=HEADERS)
-            tag_map = {t["id"]: t["name"] for t in tags_response.json().get("data", [])} if tags_response.status_code == 200 else {}
+    # We simply capture the button click into a variable here
+    run_sync = st.button("Sync Live Data", use_container_width=True)
 
-            response = requests.get(HABITICA_API_URL, headers=HEADERS)
+# --- Run the sync OUTSIDE the columns so it doesn't stretch the UI ---
+if run_sync:
+    with st.spinner("Fetching latest tasks..."):
+        import requests
+        USER_ID = os.getenv("USER_ID")
+        API_TOKEN = os.getenv("API_TOKEN")
+        HABITICA_API_URL = os.getenv("HABITICA_API_URL")
+        HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL")
+        
+        HEADERS = {"x-api-user": USER_ID, "x-api-key": API_TOKEN, "x-client": f"{USER_ID}-PAS"}
+        
+        tags_response = requests.get(HABITICA_TAGS_URL, headers=HEADERS)
+        tag_map = {t["id"]: t["name"] for t in tags_response.json().get("data", [])} if tags_response.status_code == 200 else {}
+
+        response = requests.get(HABITICA_API_URL, headers=HEADERS)
+        
+        if response.status_code == 200:
+            dailies = response.json().get("data", [])
+            daily_score = 0
+            tasks_log = []
             
-            if response.status_code == 200:
-                dailies = response.json().get("data", [])
-                daily_score = 0
-                tasks_log = []
+            for task in dailies:
+                task_id = task.get("id")
+                completed = task.get("completed", False)
+                is_due = task.get("isDue", False)
+                real_tag_names = [tag_map.get(tid, tid) for tid in task.get("tags", [])]
                 
-                for task in dailies:
-                    task_id = task.get("id")
-                    completed = task.get("completed", False)
-                    is_due = task.get("isDue", False)
-                    real_tag_names = [tag_map.get(tid, tid) for tid in task.get("tags", [])]
+                weight_data = current_weights.get(task_id, 1)
+                if isinstance(weight_data, dict):
+                    pos_w = weight_data.get("pos", 1)
+                    neg_w = weight_data.get("neg", 1)
+                else:
+                    pos_w = weight_data
+                    neg_w = weight_data
+                
+                if is_due:
+                    if completed: daily_score += pos_w
+                    else: daily_score -= neg_w
                     
-                    weight_data = current_weights.get(task_id, 1)
-                    if isinstance(weight_data, dict):
-                        pos_w = weight_data.get("pos", 1)
-                        neg_w = weight_data.get("neg", 1)
-                    else:
-                        pos_w = weight_data
-                        neg_w = weight_data
-                    
-                    if is_due:
-                        if completed: daily_score += pos_w
-                        else: daily_score -= neg_w
-                        
-                    tasks_log.append({
-                        "id": task_id, "title": task.get("text"), "completed": completed,
-                        "tags": real_tag_names, "pos_weight": pos_w, "neg_weight": neg_w, "is_due": is_due
-                    })
+                tasks_log.append({
+                    "id": task_id, "title": task.get("text"), "completed": completed,
+                    "tags": real_tag_names, "pos_weight": pos_w, "neg_weight": neg_w, "is_due": is_due
+                })
 
-                today_str = datetime.now().strftime('%Y-%m-%d')
-                history_col.update_one(
-                    {"date": today_str}, 
-                    {"$set": {"date": today_str, "net_score": daily_score, "tasks": tasks_log}}, 
-                    upsert=True
-                )
-                st.success("Synced successfully!")
-                st.rerun()
-            else:
-                st.error("Failed to connect to Habitica.")
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            history_col.update_one(
+                {"date": today_str}, 
+                {"$set": {"date": today_str, "net_score": daily_score, "tasks": tasks_log}}, 
+                upsert=True
+            )
+            st.rerun() # We removed st.success because the instant page refresh is enough feedback
+        else:
+            st.error("Failed to connect to Habitica.")
 
 st.title("Personal Analytics System")
 
@@ -262,6 +264,21 @@ due_tasks = [t for t in latest_tasks if t.get('is_due', True)]
 completed_due = [t for t in due_tasks if t['completed']]
 completion_rate = int((len(completed_due) / len(due_tasks) * 100)) if due_tasks else 0
 delta_net = today_net - df.iloc[-2]['net_score'] if len(df) > 1 else None
+
+# --- NEW: Calculate Earned vs Total Possible Points ---
+earned_points = 0
+total_possible_points = 0
+for t in due_tasks:
+    task_id = t['id']
+    if task_id in current_weights:
+        weight_data = current_weights[task_id]
+        pos_w = weight_data.get("pos", 1) if isinstance(weight_data, dict) else weight_data
+    else:
+        pos_w = t.get('pos_weight', t.get('weight', 1))
+    
+    total_possible_points += pos_w
+    if t['completed']:
+        earned_points += pos_w
 
 col1, col2, col3 = st.columns([1, 1, 1.2])
 
@@ -291,6 +308,9 @@ with col3:
         font={'color': "white"}
     )
     st.plotly_chart(fig_gauge, use_container_width=True)
+    
+    # Inject the points sub-metric directly below the gauge, centered cleanly
+    st.markdown(f"<div style='text-align: center; color: #a0a0a0; font-size: 15px; margin-top: -15px;'><strong>{earned_points} / {total_possible_points}</strong> Points</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
@@ -342,6 +362,15 @@ if selected_view == "Cumulative Graph":
     origin_date = first_date - pd.Timedelta(days=2)
     yesterday_anchor = first_date - pd.Timedelta(days=1)
     
+    # 1. INVISIBLE HOVER LAYER (Perfect alignment, no big dots)
+    fig.add_trace(go.Scatter(
+        x=plot_df['date'], y=plot_df['score'], mode='markers',
+        marker=dict(color='rgba(0,0,0,0)', size=10), # Invisible
+        showlegend=False, hoverinfo="text",
+        text=[f"Date: {d.strftime('%Y-%m-%d')}<br>Cumul Score: {s}" for d, s in zip(plot_df['date'], plot_df['score'])]
+    ))
+
+    # 2. VISUAL LINE LAYER
     fig.add_trace(go.Scatter(
         x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
         line=dict(color="#ff4b4b", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
@@ -350,8 +379,8 @@ if selected_view == "Cumulative Graph":
     first_score = plot_df.iloc[0]['score']
     first_color = "#00cc96" if first_score >= 0 else "#ff4b4b"
     fig.add_trace(go.Scatter(x=[yesterday_anchor, first_date], y=[0, first_score], mode='lines', line=dict(color=first_color, width=4), showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=[first_date], y=[first_score], mode='markers', marker=dict(color=first_color, size=8), showlegend=False, hoverinfo="text", text=f"Date: {first_date.strftime('%Y-%m-%d')}<br>Cumul Score: {first_score}"))
 
+    # Draw color-coded segments without overriding hover text or adding markers
     for i in range(1, len(plot_df)):
         prev_row = plot_df.iloc[i-1]
         curr_row = plot_df.iloc[i]
@@ -359,8 +388,7 @@ if selected_view == "Cumulative Graph":
             
         fig.add_trace(go.Scatter(
             x=[prev_row['date'], curr_row['date']], y=[prev_row['score'], curr_row['score']],
-            mode='lines+markers', line=dict(color=color, width=4), marker=dict(color=color, size=8),
-            showlegend=False, hoverinfo="text", text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Cumul Score: {curr_row['score']}"
+            mode='lines', line=dict(color=color, width=4), showlegend=False, hoverinfo="skip"
         ))
 
     fig.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
@@ -368,7 +396,7 @@ if selected_view == "Cumulative Graph":
     st.plotly_chart(fig, use_container_width=True)
 
 # ---------------------------------------------------------
-# VIEW 2: DAILY TRAJECTORY (Merged Progress + Subcategories)
+# VIEW 2: DAILY TRAJECTORY
 # ---------------------------------------------------------
 elif selected_view == "Daily Trajectory":
     daily_target = st.selectbox("Select Target:", ["Overall (All Data)"] + list(all_tags), key="daily_sel")
@@ -410,12 +438,19 @@ elif selected_view == "Daily Trajectory":
     yesterday_anchor = first_date - pd.Timedelta(days=1)
     first_score = plot_df.iloc[0]['score']
     
+    # INVISIBLE HOVER LAYER
+    fig.add_trace(go.Scatter(
+        x=plot_df['date'], y=plot_df['score'], mode='markers',
+        marker=dict(color='rgba(0,0,0,0)', size=10), 
+        showlegend=False, hoverinfo="text",
+        text=[f"Date: {d.strftime('%Y-%m-%d')}<br>Score: {s}" for d, s in zip(plot_df['date'], plot_df['score'])]
+    ))
+    
     baseline_color = "#ff4b4b" if daily_target == "Overall (All Data)" else "#ab63fa"
     first_color = base_color_positive if first_score >= 0 else "#ff4b4b"
     
     fig.add_trace(go.Scatter(x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines', line=dict(color=baseline_color, width=2, dash="dot"), showlegend=False, hoverinfo="skip"))
     fig.add_trace(go.Scatter(x=[yesterday_anchor, first_date], y=[0, first_score], mode='lines', line=dict(color=first_color, width=3), showlegend=False, hoverinfo="skip"))
-    fig.add_trace(go.Scatter(x=[first_date], y=[first_score], mode='markers', marker=dict(color=first_color, size=8), showlegend=False, hoverinfo="text", text=f"Date: {first_date.strftime('%Y-%m-%d')}<br>Score: {first_score}"))
     
     for i in range(1, len(plot_df)):
         prev_row = plot_df.iloc[i-1]
@@ -423,8 +458,7 @@ elif selected_view == "Daily Trajectory":
         color = base_color_positive if curr_row['score'] >= 0 else "#ff4b4b"
         fig.add_trace(go.Scatter(
             x=[prev_row['date'], curr_row['date']], y=[prev_row['score'], curr_row['score']],
-            mode='lines+markers', line=dict(color=color, width=3), marker=dict(size=8),
-            showlegend=False, hoverinfo="text", text=f"Date: {curr_row['date'].strftime('%Y-%m-%d')}<br>Score: {curr_row['score']}"
+            mode='lines', line=dict(color=color, width=3), showlegend=False, hoverinfo="skip"
         ))
     
     fig.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
@@ -473,13 +507,20 @@ elif selected_view == "Miscellaneous Graph":
         origin_date = first_date - pd.Timedelta(days=2)
         yesterday_anchor = first_date - pd.Timedelta(days=1)
         
+        # INVISIBLE HOVER LAYER
+        fig_misc.add_trace(go.Scatter(
+            x=plot_misc_df['date'], y=plot_misc_df['score'], mode='markers',
+            marker=dict(color='rgba(0,0,0,0)', size=10), showlegend=False, hoverinfo="text",
+            text=[f"Date: {date.strftime('%Y-%m-%d')}<br>Misc Score: {score}" for date, score in zip(plot_misc_df['date'], plot_misc_df['score'])]
+        ))
+        
         fig_misc.add_trace(go.Scatter(x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines', line=dict(color="#00cc96", width=2, dash="dot"), showlegend=False, hoverinfo="skip"))
         fig_misc.add_trace(go.Scatter(x=[yesterday_anchor, first_date], y=[0, plot_misc_df.iloc[0]['score']], mode='lines', line=dict(color="#00cc96", width=4), showlegend=False, hoverinfo="skip"))
         
+        # Draw smooth line with no markers
         fig_misc.add_trace(go.Scatter(
-            x=plot_misc_df['date'], y=plot_misc_df['score'], mode='lines+markers',
-            line=dict(color="#00cc96", width=4), marker=dict(size=8), showlegend=False, hoverinfo="text",
-            text=[f"Date: {date.strftime('%Y-%m-%d')}<br>Misc Score: {score}" for date, score in zip(plot_misc_df['date'], plot_misc_df['score'])]
+            x=plot_misc_df['date'], y=plot_misc_df['score'], mode='lines',
+            line=dict(color="#00cc96", width=4), showlegend=False, hoverinfo="skip"
         ))
         
         fig_misc.add_hline(y=0, line_dash="solid", line_color="white", opacity=0.1)
