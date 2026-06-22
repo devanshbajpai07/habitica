@@ -33,7 +33,7 @@ def fetch_and_update_history():
     client = MongoClient(MONGO_URI)
     db = client.pas_database
     history_col = db.history
-        misc_col = db.misc
+    misc_col = db.misc
 
         # 1. Fetch your custom weights from the database first!
         current_weights = {}
