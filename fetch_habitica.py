@@ -19,11 +19,11 @@ HEADERS = {
 }
 
 # Pulling URLs from the .env file with fallback defaults
-HABITICA_TASKS_URL = os.getenv("HABITICA_API_URL", "https://habitica.com/api/v3/tasks/user?type=dailys")
-HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL", "https://habitica.com/api/v3/tags")
+HABITICA_TASKS_URL = os.getenv("HABITICA_API_URL")
+HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL")
 
 # Updated to match your GitHub Secret (MONGO_URL)
-MONGO_URI = os.getenv("MONGO_URL", os.getenv("MONGO_URI"))
+MONGO_URI = os.getenv("MONGO_URL", os.getenv("MONGO_URL"))
 
 def fetch_and_update_history():
     print("Connecting to MongoDB Atlas...")
