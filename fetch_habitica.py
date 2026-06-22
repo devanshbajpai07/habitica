@@ -22,8 +22,7 @@ HEADERS = {
 }
 
 HABITICA_TASKS_URL = os.getenv("HABITICA_API_URL")
-HABITICA_TAGS_URL = os.getenv("HABITICA_TAGS_URL")
-MONGO_URI = os.getenv("MONGO_URL", os.getenv("MONGO_URI"))
+MONGO_URI = os.getenv("MONGO_URL")
 
 def fetch_and_update_history():
     print("Connecting to MongoDB Atlas...")
@@ -32,13 +31,21 @@ def fetch_and_update_history():
     history_col = db.history
     misc_col = db.misc
 
-    # 1. Fetch your custom weights from the database first!
+    print("Extracting custom weights from historical data...")
     current_weights = {}
-    weight_collections = [name for name in db.list_collection_names() if 'weight' in name.lower()]
-    if weight_collections:
-        for w in db[weight_collections[0]].find():
-            t_id = w.get('task_id', w.get('id', str(w.get('_id'))))
-            current_weights[t_id] = w
+    all_history = list(history_col.find().sort("date", 1))
+    
+    # INDESTRUCTIBLE WEIGHT FETCHER:
+    # Sweeps past correct Streamlit syncs to memorize your custom weights
+    for h in all_history:
+        if 'tasks' in h and isinstance(h['tasks'], list):
+            for t in h['tasks']:
+                t_id = t.get('id')
+                pw = t.get('pos_weight', 1)
+                nw = t.get('neg_weight', 1)
+                # If a custom weight was ever used, memorize it!
+                if pw != 1 or nw != 1:
+                    current_weights[t_id] = {'pos': pw, 'neg': nw}
 
     print("Fetching tasks from Habitica...")
     response = requests.get(HABITICA_TASKS_URL, headers=HEADERS)
@@ -53,14 +60,10 @@ def fetch_and_update_history():
             completed = task.get("completed", False)
             is_due = task.get("isDue", False)
             
-            # 2. Apply custom weights to the automated fetch!
-            weight_data = current_weights.get(task_id, 1)
-            if isinstance(weight_data, dict):
-                pos_w = weight_data.get("pos", 1)
-                neg_w = weight_data.get("neg", 1)
-            else:
-                pos_w = weight_data
-                neg_w = weight_data
+            # Apply the memorized custom weights!
+            weight_data = current_weights.get(task_id, {'pos': 1, 'neg': 1})
+            pos_w = weight_data.get("pos", 1)
+            neg_w = weight_data.get("neg", 1)
             
             if is_due:
                 if completed: 
@@ -78,6 +81,8 @@ def fetch_and_update_history():
             })
 
         today_str = datetime.now().strftime('%Y-%m-%d')
+        
+        # Overwrite today with the CORRECT weighted math
         history_col.update_one(
             {"date": today_str}, 
             {"$set": {"date": today_str, "net_score": daily_score, "tasks": tasks_log}}, 
@@ -87,24 +92,22 @@ def fetch_and_update_history():
 
         # --- WIDGET IMAGE GENERATOR ---
         print("Generating widget graph...")
+        # Re-fetch to include today's corrected data
         all_history = list(history_col.find().sort("date", 1))
         all_misc = list(misc_col.find().sort("date", 1))
         
         combined_data = {}
         
-        # 3. Recalculate historically exactly like Streamlit to guarantee a 1:1 match
+        # Recalculate historically exactly like Streamlit
         for h in all_history:
             h_score = 0
             if 'tasks' in h and isinstance(h['tasks'], list):
                 for t in h['tasks']:
                     if t.get('is_due', True):
-                        tw_data = current_weights.get(t.get('id'), 1)
-                        if isinstance(tw_data, dict):
-                            pw = tw_data.get('pos', 1)
-                            nw = tw_data.get('neg', 1)
-                        else:
-                            pw = t.get('pos_weight', 1)
-                            nw = t.get('neg_weight', 1)
+                        # Force it to use the memorized weights here too
+                        tw_data = current_weights.get(t.get('id'), {'pos': 1, 'neg': 1})
+                        pw = tw_data.get('pos', t.get('pos_weight', 1))
+                        nw = tw_data.get('neg', t.get('neg_weight', 1))
                         
                         if t.get('completed'): 
                             h_score += pw
@@ -114,6 +117,7 @@ def fetch_and_update_history():
             else:
                 combined_data[h['date']] = h.get('net_score', 0)
                 
+        # Add Miscellaneous points
         for m in all_misc:
             d = m['date']
             combined_data[d] = combined_data.get(d, 0) + m.get('score', 0)
@@ -132,10 +136,12 @@ def fetch_and_update_history():
             color = '#00cc96' if cumul[-1] >= 0 else '#ff4b4b'
             score_str = f"+{cumul[-1]}" if cumul[-1] > 0 else f"{cumul[-1]}"
             
+            # Draw line and anchored zero-axis shadow
             ax.plot(dates, cumul, color=color, linewidth=4)
             ax.fill_between(dates, cumul, 0, color=color, alpha=0.15)
             ax.axhline(y=0, color='white', alpha=0.15, linestyle='--')
             
+            # Calculate limits based on ZERO line so shadows don't break
             y_min, y_max = min(cumul + [0]), max(cumul + [0])
             y_range = y_max - y_min if y_max != y_min else 10
             ax.set_ylim(y_min - y_range * 0.15, y_max + y_range * 0.6)
