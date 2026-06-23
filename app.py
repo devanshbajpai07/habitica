@@ -10,38 +10,27 @@ load_dotenv()
 
 st.set_page_config(page_title="PAS Dashboard", layout="wide", page_icon="📈")
 
-# --- Custom CSS for Elite UI Tweaks ---
-# --- Custom CSS for Elite UI Tweaks ---
 st.markdown("""
     <style>
-        /* 1. Large Premium Navigation Dropdown */
         div[data-testid="stSelectbox"] label {
             font-size: 20px !important;
             font-weight: 600 !important;
             color: white !important;
         }
-        
-        /* 2. Enhanced Glassmorphism for KPI Metric Cards */
         div[data-testid="stMetric"] {
-            /* Diagonal gradient to simulate light hitting glass */
             background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.01)) !important;
             backdrop-filter: blur(15px) !important;
             -webkit-backdrop-filter: blur(15px) !important;
             border-radius: 20px !important;
             padding: 20px !important;
-            
-            /* Brighter top/left borders create a 3D edge reflection */
             border: 1px solid rgba(255, 255, 255, 0.05) !important;
             border-top: 1px solid rgba(255, 255, 255, 0.2) !important;
             border-left: 1px solid rgba(255, 255, 255, 0.2) !important;
-            
-            /* Deep shadow to lift it off the page */
             box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.3) !important;
         }
     </style>
 """, unsafe_allow_html=True)
 
-# --- MongoDB Connection ---
 MONGO_URI = os.getenv("MONGO_URL")
 
 @st.cache_resource
@@ -54,7 +43,6 @@ history_col = db.history
 weights_col = db.weights
 misc_col = db.misc 
 
-# --- Load Data & Recalculate ---
 data = list(history_col.find({}, {"_id": 0}))
 if not data:
     st.warning("No data found in MongoDB. Please run fetch_habitica.py first.")
@@ -72,6 +60,7 @@ recalculated_scores = []
 for index, row in df.iterrows():
     daily_recalc = 0
     for task in row['tasks']:
+        # is_due LOGIC RESTORED
         if task.get('is_due', True):
             task_id = task['id']
             if task_id in current_weights:
@@ -99,7 +88,6 @@ df['cumulative_score'] = df['net_score'].cumsum()
 latest_day = df.iloc[-1]
 latest_tasks = latest_day['tasks']
 
-# Extract all unique tags
 all_tags = set()
 for tasks in df['tasks']:
     for task in tasks:
@@ -115,7 +103,6 @@ for task in latest_tasks:
         for tag in tags:
             tasks_by_tag.setdefault(f"📁 {tag}", []).append(task)
 
-# --- TOP CONTROL BAR ---
 col_left, col_spacer, col_right1, col_right2 = st.columns([2.5, 4.5, 2.5, 2.5], vertical_alignment="bottom")
 
 with col_left:
@@ -170,6 +157,7 @@ with col_right1:
         
         has_due_tasks = False
         for t in latest_tasks:
+            # is_due LOGIC RESTORED: Only show tasks in breakdown if they are due today
             if t.get('is_due', True):
                 has_due_tasks = True
                 task_id = t['id']
@@ -185,7 +173,6 @@ with col_right1:
                     pos_w = t.get('pos_weight', t.get('weight', 1))
                     neg_w = t.get('neg_weight', t.get('weight', 1))
                 
-                # Native Markdown natively wraps text, completely eliminating horizontal scrolling
                 status = "✅" if t['completed'] else "❌"
                 impact = f"+{pos_w}" if t['completed'] else f"-{neg_w}"
                 color = "green" if t['completed'] else "red"
@@ -196,10 +183,8 @@ with col_right1:
             st.info("No tasks were due today!")
 
 with col_right2:
-    # We simply capture the button click into a variable here
     run_sync = st.button("Sync Live Data", use_container_width=True)
 
-# --- Run the sync OUTSIDE the columns so it doesn't stretch the UI ---
 if run_sync:
     with st.spinner("Fetching latest tasks..."):
         import requests
@@ -234,6 +219,7 @@ if run_sync:
                     pos_w = weight_data
                     neg_w = weight_data
                 
+                # is_due LOGIC RESTORED
                 if is_due:
                     if completed: daily_score += pos_w
                     else: daily_score -= neg_w
@@ -249,23 +235,23 @@ if run_sync:
                 {"$set": {"date": today_str, "net_score": daily_score, "tasks": tasks_log}}, 
                 upsert=True
             )
-            st.rerun() # We removed st.success because the instant page refresh is enough feedback
+            st.rerun() 
         else:
             st.error("Failed to connect to Habitica.")
 
 st.title("Personal Analytics System")
 
-# --- KPIs ---
 st.markdown("### Today's Overview")
 
 current_total = latest_day['cumulative_score']
 today_net = latest_day['net_score']
+
+# is_due LOGIC RESTORED for the Gauge and Points calculations
 due_tasks = [t for t in latest_tasks if t.get('is_due', True)]
 completed_due = [t for t in due_tasks if t['completed']]
 completion_rate = int((len(completed_due) / len(due_tasks) * 100)) if due_tasks else 0
 delta_net = today_net - df.iloc[-2]['net_score'] if len(df) > 1 else None
 
-# --- NEW: Calculate Earned vs Total Possible Points ---
 earned_points = 0
 total_possible_points = 0
 for t in due_tasks:
@@ -309,12 +295,10 @@ with col3:
     )
     st.plotly_chart(fig_gauge, use_container_width=True)
     
-    # Inject the points sub-metric directly below the gauge, centered cleanly
     st.markdown(f"<div style='text-align: center; color: #a0a0a0; font-size: 15px; margin-top: -15px;'><strong>{earned_points} / {total_possible_points}</strong> Points</div>", unsafe_allow_html=True)
 
 st.markdown("---")
 
-# --- VIEW ROUTER (MAIN NAVIGATION) ---
 view_options = [
     "Cumulative Graph", 
     "Daily Trajectory", 
@@ -322,9 +306,6 @@ view_options = [
 ]
 selected_view = st.selectbox("Select View", view_options, label_visibility="collapsed")
 
-# ---------------------------------------------------------
-# VIEW 1: CUMULATIVE GRAPH
-# ---------------------------------------------------------
 if selected_view == "Cumulative Graph":
     cumul_target = st.selectbox("Select Target:", ["Overall (All Data)"] + list(all_tags), key="cumul_sel")
     
@@ -338,6 +319,7 @@ if selected_view == "Cumulative Graph":
         for index, row in df.iterrows():
             daily_iso = 0
             for task in row['tasks']:
+                # is_due LOGIC RESTORED for graphing
                 if cumul_target in task.get('tags', []) and task.get('is_due', True):
                     task_id = task['id']
                     if task_id in current_weights:
@@ -362,15 +344,13 @@ if selected_view == "Cumulative Graph":
     origin_date = first_date - pd.Timedelta(days=2)
     yesterday_anchor = first_date - pd.Timedelta(days=1)
     
-    # 1. INVISIBLE HOVER LAYER (Perfect alignment, no big dots)
     fig.add_trace(go.Scatter(
         x=plot_df['date'], y=plot_df['score'], mode='markers',
-        marker=dict(color='rgba(0,0,0,0)', size=10), # Invisible
+        marker=dict(color='rgba(0,0,0,0)', size=10),
         showlegend=False, hoverinfo="text",
         text=[f"Date: {d.strftime('%Y-%m-%d')}<br>Cumul Score: {s}" for d, s in zip(plot_df['date'], plot_df['score'])]
     ))
 
-    # 2. VISUAL LINE LAYER
     fig.add_trace(go.Scatter(
         x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines',
         line=dict(color="#ff4b4b", width=2, dash="dot"), showlegend=False, hoverinfo="skip"
@@ -380,7 +360,6 @@ if selected_view == "Cumulative Graph":
     first_color = "#00cc96" if first_score >= 0 else "#ff4b4b"
     fig.add_trace(go.Scatter(x=[yesterday_anchor, first_date], y=[0, first_score], mode='lines', line=dict(color=first_color, width=4), showlegend=False, hoverinfo="skip"))
 
-    # Draw color-coded segments without overriding hover text or adding markers
     for i in range(1, len(plot_df)):
         prev_row = plot_df.iloc[i-1]
         curr_row = plot_df.iloc[i]
@@ -395,9 +374,6 @@ if selected_view == "Cumulative Graph":
     fig.update_layout(xaxis_title="Timeline", yaxis_title="Cumulative Score", template="plotly_dark", showlegend=False, xaxis=dict(type='date', showticklabels=False, showgrid=False), height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------
-# VIEW 2: DAILY TRAJECTORY
-# ---------------------------------------------------------
 elif selected_view == "Daily Trajectory":
     daily_target = st.selectbox("Select Target:", ["Overall (All Data)"] + list(all_tags), key="daily_sel")
     
@@ -412,6 +388,7 @@ elif selected_view == "Daily Trajectory":
         for index, row in df.iterrows():
             daily_iso = 0
             for task in row['tasks']:
+                # is_due LOGIC RESTORED
                 if daily_target in task.get('tags', []) and task.get('is_due', True):
                     task_id = task['id']
                     if task_id in current_weights:
@@ -438,7 +415,6 @@ elif selected_view == "Daily Trajectory":
     yesterday_anchor = first_date - pd.Timedelta(days=1)
     first_score = plot_df.iloc[0]['score']
     
-    # INVISIBLE HOVER LAYER
     fig.add_trace(go.Scatter(
         x=plot_df['date'], y=plot_df['score'], mode='markers',
         marker=dict(color='rgba(0,0,0,0)', size=10), 
@@ -465,9 +441,6 @@ elif selected_view == "Daily Trajectory":
     fig.update_layout(xaxis_title="Trajectory Trend", yaxis_title="Daily Score", template="plotly_dark", height=500, xaxis=dict(type='date', showticklabels=False, showgrid=False))
     st.plotly_chart(fig, use_container_width=True)
 
-# ---------------------------------------------------------
-# VIEW 3: MISCELLANEOUS GRAPH
-# ---------------------------------------------------------
 elif selected_view == "Miscellaneous Graph":
     today_str = datetime.now().strftime('%Y-%m-%d')
     
@@ -507,7 +480,6 @@ elif selected_view == "Miscellaneous Graph":
         origin_date = first_date - pd.Timedelta(days=2)
         yesterday_anchor = first_date - pd.Timedelta(days=1)
         
-        # INVISIBLE HOVER LAYER
         fig_misc.add_trace(go.Scatter(
             x=plot_misc_df['date'], y=plot_misc_df['score'], mode='markers',
             marker=dict(color='rgba(0,0,0,0)', size=10), showlegend=False, hoverinfo="text",
@@ -517,7 +489,6 @@ elif selected_view == "Miscellaneous Graph":
         fig_misc.add_trace(go.Scatter(x=[origin_date, yesterday_anchor], y=[0, 0], mode='lines', line=dict(color="#00cc96", width=2, dash="dot"), showlegend=False, hoverinfo="skip"))
         fig_misc.add_trace(go.Scatter(x=[yesterday_anchor, first_date], y=[0, plot_misc_df.iloc[0]['score']], mode='lines', line=dict(color="#00cc96", width=4), showlegend=False, hoverinfo="skip"))
         
-        # Draw smooth line with no markers
         fig_misc.add_trace(go.Scatter(
             x=plot_misc_df['date'], y=plot_misc_df['score'], mode='lines',
             line=dict(color="#00cc96", width=4), showlegend=False, hoverinfo="skip"
