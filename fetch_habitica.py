@@ -29,18 +29,13 @@ db = client.pas_database
 history_col = db.history
 misc_col = db.misc
 
-print("Extracting custom weights from historical data...")
-current_weights = {}
-all_history = list(history_col.find().sort("date", 1))
-
-for h in all_history:
-    if 'tasks' in h and isinstance(h['tasks'], list):
-        for t in h['tasks']:
-            t_id = t.get('id')
-            pw = t.get('pos_weight', 1)
-            nw = t.get('neg_weight', 1)
-            if pw != 1 or nw != 1:
-                current_weights[t_id] = {'pos': pw, 'neg': nw}
+# ---------------------------------------------------------
+# NEW: Fetching weights exactly like app.py does
+# ---------------------------------------------------------
+print("Fetching current weights from database...")
+weights_col = db.weights
+weights_doc = weights_col.find_one({"_id": "current_weights"})
+current_weights = weights_doc.get("weights", {}) if weights_doc else {}
 
 print("Fetching tags from Habitica...")
 tags_response = requests.get(HABITICA_TAGS_URL, headers=HEADERS)
@@ -61,11 +56,19 @@ if response.status_code == 200:
         
         real_tag_names = [tag_map.get(tid, tid) for tid in task.get("tags", [])]
         
-        weight_data = current_weights.get(task_id, {'pos': 1, 'neg': 1})
-        pos_w = weight_data.get("pos", 1)
-        neg_w = weight_data.get("neg", 1)
+        # Match app.py dictionary extraction logic
+        if task_id in current_weights:
+            weight_data = current_weights[task_id]
+            if isinstance(weight_data, dict):
+                pos_w = weight_data.get("pos", 1)
+                neg_w = weight_data.get("neg", 1)
+            else:
+                pos_w = weight_data
+                neg_w = weight_data
+        else:
+            pos_w = task.get('pos_weight', task.get('weight', 1))
+            neg_w = task.get('neg_weight', task.get('weight', 1))
         
-        # is_due LOGIC RESTORED: Only alter score if the task is due today
         if is_due:
             if completed: 
                 daily_score += pos_w
@@ -101,11 +104,20 @@ if response.status_code == 200:
         h_score = 0
         if 'tasks' in h and isinstance(h['tasks'], list):
             for t in h['tasks']:
-                # is_due LOGIC RESTORED for historical calculations
                 if t.get('is_due', True):
-                    tw_data = current_weights.get(t.get('id'), {'pos': 1, 'neg': 1})
-                    pw = tw_data.get('pos', t.get('pos_weight', 1))
-                    nw = tw_data.get('neg', t.get('neg_weight', 1))
+                    # Match app.py dictionary extraction logic for historical recalculation
+                    task_id = t.get('id')
+                    if task_id in current_weights:
+                        weight_data = current_weights[task_id]
+                        if isinstance(weight_data, dict):
+                            pw = weight_data.get("pos", 1)
+                            nw = weight_data.get("neg", 1)
+                        else:
+                            pw = weight_data
+                            nw = weight_data
+                    else:
+                        pw = t.get('pos_weight', t.get('weight', 1))
+                        nw = t.get('neg_weight', t.get('weight', 1))
                     
                     if t.get('completed'): 
                         h_score += pw

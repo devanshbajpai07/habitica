@@ -54,13 +54,16 @@ current_weights = weights_doc.get("weights", {}) if weights_doc else {}
 df = pd.DataFrame(data)
 df['date'] = pd.to_datetime(df['date'])
 df = df.sort_values('date').reset_index(drop=True)
+# --- FETCH MISC DATA ---
+misc_data = list(misc_col.find({}, {"_id": 0}))
+misc_dict = {m['date']: m.get('score', 0) for m in misc_data}
 
 # Dynamic Recalculation Engine
 recalculated_scores = []
 for index, row in df.iterrows():
     daily_recalc = 0
+    date_str = row['date'].strftime('%Y-%m-%d')
     for task in row['tasks']:
-        # is_due LOGIC RESTORED
         if task.get('is_due', True):
             task_id = task['id']
             if task_id in current_weights:
@@ -80,6 +83,8 @@ for index, row in df.iterrows():
             else:
                 daily_recalc -= neg_w
                 
+    # Inject daily misc points into the total
+    daily_recalc += misc_dict.get(date_str, 0)
     recalculated_scores.append(daily_recalc)
 
 df['net_score'] = recalculated_scores 
