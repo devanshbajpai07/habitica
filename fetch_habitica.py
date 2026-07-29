@@ -102,10 +102,10 @@ if response.status_code == 200:
     
     for h in all_history:
         h_score = 0
-        if 'tasks' in h and isinstance(h['tasks'], list):
-            for t in h['tasks']:
+        tasks = h.get('tasks', [])
+        if isinstance(tasks, list) and len(tasks) > 0:
+            for t in tasks:
                 if t.get('is_due', True):
-                    # Match app.py dictionary extraction logic for historical recalculation
                     task_id = t.get('id')
                     if task_id in current_weights:
                         weight_data = current_weights[task_id]
@@ -123,9 +123,7 @@ if response.status_code == 200:
                         h_score += pw
                     else: 
                         h_score -= nw
-            combined_data[h['date']] = h_score
-        else:
-            combined_data[h['date']] = h.get('net_score', 0)
+        combined_data[str(h['date'])[:10]] = h_score
             
     for m in all_misc:
         d = m['date']
